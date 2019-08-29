@@ -1,0 +1,344 @@
+const fs = require("fs");
+const http = require("http");
+const https = require("https");
+const tls = require("tls");
+const path = require("path");
+const mime = require("mime");
+const cf = require("./util/common.js");
+const pug = require("pug");
+const sass = require("node-sass");
+const watchAndCompile = require("./util/watch_compiler.js");
+//const accu = require("./util/accumulator.js");
+const WebSocket = require("ws")
+
+module.exports = function(input) {
+    let config = {
+        hostnames: ["localhost"],
+        httpPort: 8080,
+        httpsPort: 8081,
+        apiDir: "api",
+        templatesDir: "templates",
+        filesDir: "html",
+        pugDir: "",
+        pugIncludeDirs: [],
+        globalHeaders: {},
+        pageHandlers: [],
+        apiPassthrough: {},
+        basicCacheControl: {
+            exts: ["ttf", "png", "jpg", "svg", "gif", "webmanifest", "ico"],
+            seconds: 604800
+        },
+        ip: "0.0.0.0",
+        relativeRoot: "",
+        ws: false
+    }
+    Object.assign(config, input);
+
+    let encrypt = config.httpsPort != null && fs.existsSync("/etc/letsencrypt");
+    let options;
+    if (encrypt) {
+        function getFiles(hostname) {
+            return {
+                key: fs.readFileSync(`/etc/letsencrypt/live/${hostname}/privkey.pem`),
+                cert: fs.readFileSync(`/etc/letsencrypt/live/${hostname}/cert.pem`),
+                ca: [
+                    fs.readFileSync(`/etc/letsencrypt/live/${hostname}/fullchain.pem`)
+                ]
+            };
+        }
+        function getSecureContext(hostname) {
+            return tls.createSecureContext(getFiles(hostname));
+        }
+        let secureContexts = {};
+        config.hostnames.forEach(hostname => {
+            secureContexts[hostname] = getSecureContext(hostname);
+        });
+        options = getFiles(config.hostnames[0]);
+        options.SNICallback = function(domain, callback) {
+            if (secureContexts[domain]) {
+                callback(null, secureContexts[domain]);
+            } else {
+                callback(null, Object.values(secureContexts)[0]);
+            }
+        }
+    }
+
+    //let hitManager = new accu.AccumulatorManager(sqlite, 10000);
+    //new accu.AccumulatorControl("pathHit", hitManager, "Hits", "url", "hits");
+    //new accu.AccumulatorControl("domainHit", hitManager, "DomainHits", "domain", "hits");
+
+    let pugCache = new Map();
+    if (config.pugDir) watchAndCompile(config.pugDir, config.pugIncludeDirs, pugCache, fullPath =>
+        pug.compileFile(fullPath, {doctype: "html"})
+    )
+    let sassCache = new Map();
+    if (config.sassDir) watchAndCompile(config.sassDir, [], sassCache, fullPath =>
+        fs.promises.readFile(fullPath, {encoding: "utf8"}).then(data =>
+            data ? sass.renderSync({data, indentedSyntax: true}).css.toString() : null
+        )
+    )
+
+    let routeHandlers = [];
+    Object.assign(config.apiPassthrough, {resolveTemplates, pugCache});
+    {
+        let apiFiles = fs.readdirSync(config.apiDir);
+        apiFiles = apiFiles.map(f => path.join(config.relativeRoot, config.apiDir, f));
+        apiFiles.forEach(f => {
+            routeHandlers = routeHandlers.concat(
+                require(f)(config.apiPassthrough)
+            );
+        });
+    }
+
+    function mimeType(type) {
+        const types = {
+            "ttf": "application/font-sfnt",
+            "ico": "image/x-icon",
+            "sass": "text/css"
+        };
+        return types[type.split(".")[1]] || mime.getType(type);
+    }
+
+    function toRange(data, req) {
+        let range = "";
+        if (req.headers.range && req.headers.range.startsWith("bytes")) {
+            range = req.headers.range.match(/^bytes=(.*)$/)[1];
+        }
+        let rangeStart = range.split("-")[0] || 0;
+        let rangeEnd = range.split("-")[1] || data.length-1;
+        let statusCode = range ? 206 : 200;
+        let headers = range ? {"Accept-Ranges": "bytes", "Content-Range": "bytes "+rangeStart+"-"+rangeEnd+"/"+data.length} : {};
+        let result;
+        if (!range) result = data;
+        else if (range.match(/\d-\d/)) result = data.slice(range.split("-")[0]);
+        else if (range.match(/\d-$/)) result = data.slice(range.split("-")[0]);
+        else if (range.match(/^-\d/)) result = data.slice(0, range.split("-")[1]);
+        else result = data;
+        return {result, headers, statusCode};
+    }
+
+    async function resolveTemplates(page) {
+        let promises = [];
+        let template;
+        let regex = /<!-- TEMPLATE (\S+?) ?-->/g;
+        while (template = regex.exec(page)) {
+            let templateName = template[1];
+            promises.push(new Promise(resolve => {
+                fs.readFile(path.join(config.relativeRoot, config.templatesDir, templateName+".html"), {encoding: "utf8"}, (err, content) => {
+                    if (err) resolve(undefined);
+                    else resolve({template: templateName, content: content});
+                });
+            }));
+        }
+        let results = await Promise.all(promises);
+        results.filter(r => r).forEach(result => {
+            page = page.replace(new RegExp("<!-- TEMPLATE "+result.template+" ?-->"), () => result.content);
+        });
+        return page;
+    }
+
+    function serverRequest(req, res) {
+        req.gmethod = req.method == "HEAD" ? "GET" : req.method;
+        if (!req.headers.host) req.headers.host = config.hostnames[0];
+        let headers = {};
+        try {
+            req.url = decodeURI(req.url);
+        } catch (e) {
+            res.writeHead(400, {"Content-Type": "text/plain"});
+            res.end("Malformed URI");
+            return;
+        }
+        if (config.basicCacheControl.exts.includes(req.url.split(".").slice(-1)[0])) headers["Cache-Control"] = `max-age=${config.basicCacheControl.seconds}, public`;
+        let [reqPath, paramString] = req.url.split("?");
+        if (reqPath.length > 5) reqPath = reqPath.replace(/\/+$/, "");
+        let params = {};
+        if (paramString) paramString.split("&").forEach(p => {
+            let [key, value] = p.split("=");
+            params[key] = value;
+        });
+        // Attempt to use routeHandlers first
+        let foundRoute = routeHandlers.find(h => {
+            let rr = new RegExp("^"+h.route+"$");
+            let match = reqPath.match(rr);
+            if (match && h.methods.includes(req.gmethod)) {
+                cf.log("Using routeHandler "+h.route+" to respond to "+reqPath, "spam");
+                new Promise((resolve, reject) => {
+                    let fill = match.slice(1);
+                    if (req.method == "POST" || req.method == "PATCH") {
+                        let buffers = [];
+                        req.on("data", (chunk) => {
+                            buffers.push(chunk);
+                        });
+                        req.on("end", (chunk) => {
+                            let body = Buffer.concat(buffers);
+                            let data;
+                            try {
+                                data = JSON.parse(body);
+                            } catch (e) {};
+                            h.code({req, reqPath, res, fill, params, body, data}).then(resolve).catch(reject);
+                        });
+                    } else {
+                        h.code({req, reqPath, res, fill, params}).then(resolve).catch(reject);
+                    }
+                }).then(result => {
+                    if (result === null) {
+                        cf.log("Ignoring null response for request "+reqPath, "info");
+                        return;
+                    }
+                    if (result && result.stream) {
+                        cf.log("Using stream for request "+reqPath, "info");
+                        if (!result.headers) result.headers = {};
+                        let combinedHeaders = Object.assign({"Content-Type": result.contentType}, config.globalHeaders, headers, result.headers);
+                        Object.entries(combinedHeaders).forEach(entry => {
+                            if (entry[1] == null) delete combinedHeaders[entry[0]]
+                        })
+                        if (typeof(result.statusCode) == "number") res.writeHead(result.statusCode, combinedHeaders);
+                        result.stream.pipe(res);
+                    } else {
+                        if (result.constructor.name == "Array") {
+                            let newResult = {statusCode: result[0], content: result[1]};
+                            if (typeof(newResult.content) == "number") newResult.content = {code: newResult.content};
+                            result = newResult;
+                        }
+                        if (!result.contentType) result.contentType = (typeof(result.content) == "object" ? "application/json" : "text/plain");
+                        if (typeof(result.content) == "object" && ["Object", "Array"].includes(result.content.constructor.name)) result.content = JSON.stringify(result.content);
+                        if (!result.headers) result.headers = {};
+                        headers["Content-Length"] = Buffer.byteLength(result.content);
+                        res.writeHead(result.statusCode, Object.assign({"Content-Type": result.contentType}, config.globalHeaders, headers, result.headers));
+                        res.write(result.content);
+                        res.end();
+                        //if (result.statusCode == 200) hitManager.add("pathHit", reqPath);
+                        //if (req.headers.host) hitManager.add("domainHit", req.headers.host);
+                    }
+                }).catch(err => {
+                    res.writeHead(500, {"Content-Type": "text/plain"});
+                    res.write(
+                        `===| 500: Internal server error |===`
+                        +`\n\nWhoopsie poopsie! Looks like there was a little fucky wucky in this code right here:`
+                        +`\n\n`+err.stack
+                        +`\n\n===| What can I do? |==`
+                        +`\n\nIf you're visiting the site, please report this error.`
+                        +`\n\nIf you made this mess, clean it up.`
+                    );
+                    res.end();
+                });
+                return true;
+            }
+        });
+        if (!foundRoute) {
+            // If that fails, try pageHandlers
+            foundRoute = config.pageHandlers.find(h => {
+                let rr = new RegExp("^"+h.web+"$");
+                let match = reqPath.match(rr);
+                if (match) {
+                    new Promise((resolve, reject) => {
+                        if (h.type == "pug") resolve(resolveTemplates(pugCache.get(h.local)()));
+                        else if (h.type == "sass") resolve(sassCache.get(h.local));
+                        else fs.readFile(path.join(config.relativeRoot, h.local), {encoding: "utf8"}, (err, page) => {
+                            if (err) reject(err);
+                            else resolve(resolveTemplates(page));
+                        });
+                    }).then(page => {
+                        headers["Content-Length"] = Buffer.byteLength(page);
+                        cf.log("Using pageHandler "+h.web+" ("+h.local+") to respond to "+reqPath, "spam");
+                        res.writeHead(200, Object.assign({"Content-Type": mimeType(h.local)}, headers, config.globalHeaders));
+                        if (req.method == "HEAD") {
+                            res.end();
+                        } else {
+                            res.write(page, () => {
+                                res.end();
+                                //hitManager.add("pathHit", reqPath);
+                                //if (req.headers.host) hitManager.add("domainHit", req.headers.host);
+                            });
+                        }
+                    });
+                    return true;
+                } else {
+                    return false;
+                }
+            });
+            if (!foundRoute) {
+                // If THAT fails, try reading the html directory for a matching file
+                let filename = path.join(config.relativeRoot, config.filesDir, reqPath);
+                let inPublic = filename.startsWith(path.join(config.relativeRoot, config.filesDir));
+                fs.stat(filename, (err, stats) => {
+                    if (!inPublic) cf.log("Non-public access attempt caught!", "warning");
+                    if (err || stats.isDirectory() || !inPublic) {
+                        cf.log("Couldn't handle request for "+reqPath+" → "+filename, "warning");
+                        res.writeHead(404, Object.assign({"Content-Type": "text/plain"}, config.globalHeaders));
+                        res.write("404 Not Found");
+                        res.end();
+                        return;
+                    }
+                    //console.log(stats);
+                    if (stats.size < 50*10**6 || req.headers["Range"]) { //TODO: remove range check
+                        cf.log("Using file directly for "+reqPath+" (read) → "+filename, "spam");
+                        fs.readFile(filename, {encoding: null}, (err, content) => {
+                            if (err) throw err;
+                            let ranged = toRange(content, req);
+                            headers["Content-Length"] = Buffer.byteLength(ranged.result);
+                            res.writeHead(ranged.statusCode, Object.assign({"Content-Type": mimeType(reqPath)}, ranged.headers, headers, config.globalHeaders));
+                            res.write(ranged.result);
+                            res.end();
+                            //hitManager.add("pathHit", reqPath);
+                            //if (req.headers.host) hitManager.add("domainHit", req.headers.host);
+                        });
+                    } else {
+                        cf.log("Using file directly for "+reqPath+" (stream) → "+filename, "spam");
+                        let stream = fs.createReadStream(filename);
+                        headers["Content-Length"] = stats.size;
+                        res.writeHead(200, Object.assign({"Content-Type": mimeType(reqPath)}, headers, config.globalHeaders));
+                        let resReady = true;
+                        stream.on("readable", () => {
+                            if (resReady) doRead();
+                            else {
+                                //console.log("(waiting for flush)");
+                                pending = true;
+                            }
+                        });
+                        function doRead() {
+                            let data = stream.read();
+                            if (data == null) return; //console.log("No data available");
+                            let flushed = res.write(data);
+                            //console.log("Wrote data: "+data.length);
+                            if (flushed) {
+                                //console.log("Flushed data automatically, will read again");
+                                doRead();
+                            } else {
+                                //console.log("Flushing data...");
+                                resReady = false;
+                                res.once("drain", () => {
+                                    //console.log("Flushed data manually, will read again");
+                                    resReady = true;
+                                    doRead();
+                                });
+                            }
+                        }
+                        stream.on("end", () => {
+                            console.log("Stream ended.");
+                            res.end();
+                        });
+                    }
+                });
+            }
+        }
+    }
+
+    function secureRedirect(req, res) {
+        res.writeHead(301, {"Location": `https://${req.headers.host}${req.url}`});
+        res.end();
+    }
+
+    if (encrypt) {
+        var server = http.createServer(secureRedirect).listen(config.httpPort, config.ip);
+        https.createServer(options, serverRequest).listen(config.httpsPort, config.ip);
+    } else {
+        var server = http.createServer(serverRequest).listen(config.httpPort, config.ip);
+    }
+    if (config.ws) {
+        let wss = new WebSocket.Server({server})
+        config.apiPassthrough.wss = wss
+    }
+
+    cf.log("Started server", "info");
+}
