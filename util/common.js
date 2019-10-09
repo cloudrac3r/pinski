@@ -1,13 +1,11 @@
-Map.prototype.toObject = function() {
-    let array = [...this];
-    let object = {};
-    array.forEach(i => object[i[0]] = i[1]);
-    return object;
-}
+const util = require("util")
+
+const logLevelsIgnore = ["spam"]
 
 module.exports = {
     // Log a message to console with a prefix
     log: function(text, severity) {
+        if (logLevelsIgnore.includes(severity)) return
         let prefixes = {"error": "[#]", "warning": "[!]", "info": "[.]", "spam": "[ ]", "unknown": "[?]", "responseInfo": "( )", "responseError": "(!)"}; // Names and types of logging
         text = module.exports.stringify(text, true);
         let prefix = (prefixes[severity] || prefixes.unknown)+" ["+module.exports.getSixTime()+"] ";

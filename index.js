@@ -1,3 +1,5 @@
+//@ts-check
+
 const fs = require("fs");
 const http = require("http");
 const https = require("https");
@@ -8,14 +10,13 @@ const cf = require("./util/common.js");
 const pug = require("pug");
 const sass = require("node-sass");
 const watchAndCompile = require("./util/watch_compiler.js");
-//const accu = require("./util/accumulator.js");
 const WebSocket = require("ws")
 
 module.exports = function(input) {
     let config = {
         hostnames: ["localhost"],
         httpPort: 8080,
-        httpsPort: 8081,
+        httpsPort: null,
         apiDir: "api",
         templatesDir: "templates",
         filesDir: "html",
@@ -23,7 +24,6 @@ module.exports = function(input) {
         pugIncludeDirs: [],
         globalHeaders: {},
         pageHandlers: [],
-        apiPassthrough: {},
         basicCacheControl: {
             exts: ["ttf", "png", "jpg", "svg", "gif", "webmanifest", "ico"],
             seconds: 604800
@@ -34,9 +34,8 @@ module.exports = function(input) {
     }
     Object.assign(config, input);
 
-    let encrypt = config.httpsPort != null && fs.existsSync("/etc/letsencrypt");
     let options;
-    if (encrypt) {
+    if (config.httpsPort) {
         function getFiles(hostname) {
             return {
                 key: fs.readFileSync(`/etc/letsencrypt/live/${hostname}/privkey.pem`),
@@ -63,14 +62,12 @@ module.exports = function(input) {
         }
     }
 
-    //let hitManager = new accu.AccumulatorManager(sqlite, 10000);
-    //new accu.AccumulatorControl("pathHit", hitManager, "Hits", "url", "hits");
-    //new accu.AccumulatorControl("domainHit", hitManager, "DomainHits", "domain", "hits");
-
+    /** @type {Map<string, (locals?: any) => string>} */
     let pugCache = new Map();
     if (config.pugDir) watchAndCompile(config.pugDir, config.pugIncludeDirs, pugCache, fullPath =>
         pug.compileFile(fullPath, {doctype: "html"})
     )
+    /** @type {Map<string, string>} */
     let sassCache = new Map();
     if (config.sassDir) watchAndCompile(config.sassDir, [], sassCache, fullPath =>
         fs.promises.readFile(fullPath, {encoding: "utf8"}).then(data =>
@@ -79,13 +76,11 @@ module.exports = function(input) {
     )
 
     let routeHandlers = [];
-    Object.assign(config.apiPassthrough, {resolveTemplates, pugCache});
-    {
+    const loadAPI = () => {
         let apiFiles = fs.readdirSync(config.apiDir);
-        apiFiles = apiFiles.map(f => path.join(config.relativeRoot, config.apiDir, f));
         apiFiles.forEach(f => {
             routeHandlers = routeHandlers.concat(
-                require(f)(config.apiPassthrough)
+                require(path.join(config.relativeRoot, config.apiDir, f))
             );
         });
     }
@@ -99,22 +94,39 @@ module.exports = function(input) {
         return types[type.split(".")[1]] || mime.getType(type);
     }
 
-    function toRange(data, req) {
-        let range = "";
-        if (req.headers.range && req.headers.range.startsWith("bytes")) {
-            range = req.headers.range.match(/^bytes=(.*)$/)[1];
+    function toRange(length, headers, req) {
+        let start = 0
+        let end = length-1
+        let statusCode = 200
+        if (req.headers.range) {
+            let match = req.headers.range.match(/^bytes=([0-9]*)-([0-9]*)$/)
+            if (match) {
+                if (match[1]) {
+                    let value = +match[1]
+                    if (!isNaN(value) && value >= start) {
+                        start = value
+                        statusCode = 206
+                    }
+                }
+                if (match[2]) {
+                    let value = +match[2]
+                    if (!isNaN(value) && value <= end) {
+                        end = value
+                        statusCode = 206
+                    }
+                }
+            }
         }
-        let rangeStart = range.split("-")[0] || 0;
-        let rangeEnd = range.split("-")[1] || data.length-1;
-        let statusCode = range ? 206 : 200;
-        let headers = range ? {"Accept-Ranges": "bytes", "Content-Range": "bytes "+rangeStart+"-"+rangeEnd+"/"+data.length} : {};
-        let result;
-        if (!range) result = data;
-        else if (range.match(/\d-\d/)) result = data.slice(range.split("-")[0]);
-        else if (range.match(/\d-$/)) result = data.slice(range.split("-")[0]);
-        else if (range.match(/^-\d/)) result = data.slice(0, range.split("-")[1]);
-        else result = data;
-        return {result, headers, statusCode};
+        if (start > end) {
+            start = 0
+            end = length-1
+            statusCode = 200
+        }
+        if (statusCode == 206) {
+            headers["Accept-Ranges"] = "bytes"
+            headers["Content-Range"] = "bytes "+start+"-"+end+"/"+length
+        }
+        return {statusCode, start, end};
     }
 
     async function resolveTemplates(page) {
@@ -138,7 +150,7 @@ module.exports = function(input) {
     }
 
     function serverRequest(req, res) {
-        req.gmethod = req.method == "HEAD" ? "GET" : req.method;
+        req.gmethod = req.method === "HEAD" ? "GET" : req.method;
         if (!req.headers.host) req.headers.host = config.hostnames[0];
         let headers = {};
         try {
@@ -164,7 +176,7 @@ module.exports = function(input) {
                 cf.log("Using routeHandler "+h.route+" to respond to "+reqPath, "spam");
                 new Promise((resolve, reject) => {
                     let fill = match.slice(1);
-                    if (req.method == "POST" || req.method == "PATCH") {
+                    if (req.method === "POST" || req.method === "PATCH") {
                         let buffers = [];
                         req.on("data", (chunk) => {
                             buffers.push(chunk);
@@ -173,7 +185,7 @@ module.exports = function(input) {
                             let body = Buffer.concat(buffers);
                             let data;
                             try {
-                                data = JSON.parse(body);
+                                data = JSON.parse(body.toString());
                             } catch (e) {};
                             h.code({req, reqPath, res, fill, params, body, data}).then(resolve).catch(reject);
                         });
@@ -192,23 +204,21 @@ module.exports = function(input) {
                         Object.entries(combinedHeaders).forEach(entry => {
                             if (entry[1] == null) delete combinedHeaders[entry[0]]
                         })
-                        if (typeof(result.statusCode) == "number") res.writeHead(result.statusCode, combinedHeaders);
+                        if (typeof(result.statusCode) === "number") res.writeHead(result.statusCode, combinedHeaders);
                         result.stream.pipe(res);
                     } else {
-                        if (result.constructor.name == "Array") {
+                        if (result.constructor.name === "Array") {
                             let newResult = {statusCode: result[0], content: result[1]};
-                            if (typeof(newResult.content) == "number") newResult.content = {code: newResult.content};
+                            if (typeof(newResult.content) === "number") newResult.content = {code: newResult.content};
                             result = newResult;
                         }
                         if (!result.contentType) result.contentType = (typeof(result.content) == "object" ? "application/json" : "text/plain");
-                        if (typeof(result.content) == "object" && ["Object", "Array"].includes(result.content.constructor.name)) result.content = JSON.stringify(result.content);
+                        if (typeof(result.content) === "object" && ["Object", "Array"].includes(result.content.constructor.name)) result.content = JSON.stringify(result.content);
                         if (!result.headers) result.headers = {};
                         headers["Content-Length"] = Buffer.byteLength(result.content);
                         res.writeHead(result.statusCode, Object.assign({"Content-Type": result.contentType}, config.globalHeaders, headers, result.headers));
                         res.write(result.content);
                         res.end();
-                        //if (result.statusCode == 200) hitManager.add("pathHit", reqPath);
-                        //if (req.headers.host) hitManager.add("domainHit", req.headers.host);
                     }
                 }).catch(err => {
                     res.writeHead(500, {"Content-Type": "text/plain"});
@@ -232,8 +242,8 @@ module.exports = function(input) {
                 let match = reqPath.match(rr);
                 if (match) {
                     new Promise((resolve, reject) => {
-                        if (h.type == "pug") resolve(resolveTemplates(pugCache.get(h.local)()));
-                        else if (h.type == "sass") resolve(sassCache.get(h.local));
+                        if (h.type === "pug") resolve(resolveTemplates(pugCache.get(h.local)()));
+                        else if (h.type === "sass") resolve(sassCache.get(h.local));
                         else fs.readFile(path.join(config.relativeRoot, h.local), {encoding: "utf8"}, (err, page) => {
                             if (err) reject(err);
                             else resolve(resolveTemplates(page));
@@ -242,13 +252,11 @@ module.exports = function(input) {
                         headers["Content-Length"] = Buffer.byteLength(page);
                         cf.log("Using pageHandler "+h.web+" ("+h.local+") to respond to "+reqPath, "spam");
                         res.writeHead(200, Object.assign({"Content-Type": mimeType(h.local)}, headers, config.globalHeaders));
-                        if (req.method == "HEAD") {
+                        if (req.method === "HEAD") {
                             res.end();
                         } else {
                             res.write(page, () => {
                                 res.end();
-                                //hitManager.add("pathHit", reqPath);
-                                //if (req.headers.host) hitManager.add("domainHit", req.headers.host);
                             });
                         }
                     });
@@ -270,55 +278,12 @@ module.exports = function(input) {
                         res.end();
                         return;
                     }
-                    //console.log(stats);
-                    if (stats.size < 50*10**6 || req.headers["Range"]) { //TODO: remove range check
-                        cf.log("Using file directly for "+reqPath+" (read) → "+filename, "spam");
-                        fs.readFile(filename, {encoding: null}, (err, content) => {
-                            if (err) throw err;
-                            let ranged = toRange(content, req);
-                            headers["Content-Length"] = Buffer.byteLength(ranged.result);
-                            res.writeHead(ranged.statusCode, Object.assign({"Content-Type": mimeType(reqPath)}, ranged.headers, headers, config.globalHeaders));
-                            res.write(ranged.result);
-                            res.end();
-                            //hitManager.add("pathHit", reqPath);
-                            //if (req.headers.host) hitManager.add("domainHit", req.headers.host);
-                        });
-                    } else {
-                        cf.log("Using file directly for "+reqPath+" (stream) → "+filename, "spam");
-                        let stream = fs.createReadStream(filename);
-                        headers["Content-Length"] = stats.size;
-                        res.writeHead(200, Object.assign({"Content-Type": mimeType(reqPath)}, headers, config.globalHeaders));
-                        let resReady = true;
-                        stream.on("readable", () => {
-                            if (resReady) doRead();
-                            else {
-                                //console.log("(waiting for flush)");
-                                pending = true;
-                            }
-                        });
-                        function doRead() {
-                            let data = stream.read();
-                            if (data == null) return; //console.log("No data available");
-                            let flushed = res.write(data);
-                            //console.log("Wrote data: "+data.length);
-                            if (flushed) {
-                                //console.log("Flushed data automatically, will read again");
-                                doRead();
-                            } else {
-                                //console.log("Flushing data...");
-                                resReady = false;
-                                res.once("drain", () => {
-                                    //console.log("Flushed data manually, will read again");
-                                    resReady = true;
-                                    doRead();
-                                });
-                            }
-                        }
-                        stream.on("end", () => {
-                            console.log("Stream ended.");
-                            res.end();
-                        });
-                    }
+                    cf.log("Streaming "+reqPath+" → "+filename, "spam");
+                    let ranged = toRange(stats.size, headers, req);
+                    headers["Content-Length"] = ranged.end - ranged.start + 1
+                    res.writeHead(ranged.statusCode, Object.assign({"Content-Type": mimeType(reqPath)}, headers, config.globalHeaders));
+                    let stream = fs.createReadStream(filename, {start: ranged.start, end: ranged.end});
+                    stream.pipe(res)
                 });
             }
         }
@@ -329,16 +294,19 @@ module.exports = function(input) {
         res.end();
     }
 
-    if (encrypt) {
-        var server = http.createServer(secureRedirect).listen(config.httpPort, config.ip);
+    let server = null
+    if (config.httpsPort) {
+        server = http.createServer(secureRedirect).listen(config.httpPort, config.ip);
         https.createServer(options, serverRequest).listen(config.httpsPort, config.ip);
     } else {
-        var server = http.createServer(serverRequest).listen(config.httpPort, config.ip);
+        server = http.createServer(serverRequest).listen(config.httpPort, config.ip);
     }
+    let wss = null
     if (config.ws) {
-        let wss = new WebSocket.Server({server})
-        config.apiPassthrough.wss = wss
+        wss = new WebSocket.Server({server})
     }
 
     cf.log("Started server", "info");
+
+    return {loadAPI, resolveTemplates, pugCache, sassCache, server, wss}
 }
