@@ -76,13 +76,42 @@ module.exports = function(input) {
     )
 
     let routeHandlers = [];
+    const routeStore = new Map();
+    const cancelStore = new Map();
+    function rebuildRoutes() {
+        //console.log("Building routes: "+routeStore.size+" items in map")
+        routeHandlers = [].concat(...routeStore.values())
+        //console.log(routeHandlers)
+    }
     const loadAPI = () => {
-        let apiFiles = fs.readdirSync(config.apiDir);
+        watchAndCompile(path.join(config.relativeRoot, config.apiDir), [], new Map(), async fullPath => {
+            if (cancelStore.has(fullPath)) {
+                const cancel = cancelStore.get(fullPath)
+                cancelStore.delete(fullPath)
+                cancel()
+            }
+            delete require.cache[require.resolve(fullPath)]
+            let routes = require(fullPath)
+            if (routes instanceof Array) {
+                routes = routes.filter(r => {
+                    if (r.cancel) {
+                        cancelStore.set(fullPath, r.code)
+                        return false
+                    } else {
+                        return true
+                    }
+                })
+                //console.log("Adding new handers", routes)
+                //routeStore.set(fullPath, routes)
+                rebuildRoutes()
+            }
+        })
+        /*let apiFiles = fs.readdirSync(config.apiDir);
         apiFiles.forEach(f => {
             routeHandlers = routeHandlers.concat(
                 require(path.join(config.relativeRoot, config.apiDir, f))
             );
-        });
+        });*/
     }
 
     function mimeType(type) {
@@ -170,70 +199,70 @@ module.exports = function(input) {
         });
         // Attempt to use routeHandlers first
         let foundRoute = routeHandlers.find(h => {
+            if (!(h.route && h.methods)) return false
             let rr = new RegExp("^"+h.route+"$");
             let match = reqPath.match(rr);
-            if (match && h.methods.includes(req.gmethod)) {
-                cf.log("Using routeHandler "+h.route+" to respond to "+reqPath, "spam");
-                new Promise((resolve, reject) => {
-                    let fill = match.slice(1);
-                    if (req.method === "POST" || req.method === "PATCH") {
-                        let buffers = [];
-                        req.on("data", (chunk) => {
-                            buffers.push(chunk);
-                        });
-                        req.on("end", (chunk) => {
-                            let body = Buffer.concat(buffers);
-                            let data;
-                            try {
-                                data = JSON.parse(body.toString());
-                            } catch (e) {};
-                            h.code({req, reqPath, res, fill, params, body, data}).then(resolve).catch(reject);
-                        });
-                    } else {
-                        h.code({req, reqPath, res, fill, params}).then(resolve).catch(reject);
+            if (!(match && h.methods.includes(req.gmethod))) return false
+            cf.log("Using routeHandler "+h.route+" to respond to "+reqPath, "spam");
+            new Promise((resolve, reject) => {
+                let fill = match.slice(1);
+                if (req.method === "POST" || req.method === "PATCH") {
+                    let buffers = [];
+                    req.on("data", (chunk) => {
+                        buffers.push(chunk);
+                    });
+                    req.on("end", (chunk) => {
+                        let body = Buffer.concat(buffers);
+                        let data;
+                        try {
+                            data = JSON.parse(body.toString());
+                        } catch (e) {};
+                        h.code({req, reqPath, res, fill, params, body, data}).then(resolve).catch(reject);
+                    });
+                } else {
+                    h.code({req, reqPath, res, fill, params}).then(resolve).catch(reject);
+                }
+            }).then(result => {
+                if (result === null) {
+                    cf.log("Ignoring null response for request "+reqPath, "info");
+                    return;
+                }
+                if (result && result.stream) {
+                    cf.log("Using stream for request "+reqPath, "info");
+                    if (!result.headers) result.headers = {};
+                    let combinedHeaders = Object.assign({"Content-Type": result.contentType}, config.globalHeaders, headers, result.headers);
+                    Object.entries(combinedHeaders).forEach(entry => {
+                        if (entry[1] == null) delete combinedHeaders[entry[0]]
+                    })
+                    if (typeof(result.statusCode) === "number") res.writeHead(result.statusCode, combinedHeaders);
+                    result.stream.pipe(res);
+                } else {
+                    if (result.constructor.name === "Array") {
+                        let newResult = {statusCode: result[0], content: result[1]};
+                        if (typeof(newResult.content) === "number") newResult.content = {code: newResult.content};
+                        result = newResult;
                     }
-                }).then(result => {
-                    if (result === null) {
-                        cf.log("Ignoring null response for request "+reqPath, "info");
-                        return;
-                    }
-                    if (result && result.stream) {
-                        cf.log("Using stream for request "+reqPath, "info");
-                        if (!result.headers) result.headers = {};
-                        let combinedHeaders = Object.assign({"Content-Type": result.contentType}, config.globalHeaders, headers, result.headers);
-                        Object.entries(combinedHeaders).forEach(entry => {
-                            if (entry[1] == null) delete combinedHeaders[entry[0]]
-                        })
-                        if (typeof(result.statusCode) === "number") res.writeHead(result.statusCode, combinedHeaders);
-                        result.stream.pipe(res);
-                    } else {
-                        if (result.constructor.name === "Array") {
-                            let newResult = {statusCode: result[0], content: result[1]};
-                            if (typeof(newResult.content) === "number") newResult.content = {code: newResult.content};
-                            result = newResult;
-                        }
-                        if (!result.contentType) result.contentType = (typeof(result.content) == "object" ? "application/json" : "text/plain");
-                        if (typeof(result.content) === "object" && ["Object", "Array"].includes(result.content.constructor.name)) result.content = JSON.stringify(result.content);
-                        if (!result.headers) result.headers = {};
-                        headers["Content-Length"] = Buffer.byteLength(result.content);
-                        res.writeHead(result.statusCode, Object.assign({"Content-Type": result.contentType}, config.globalHeaders, headers, result.headers));
-                        res.write(result.content);
-                        res.end();
-                    }
-                }).catch(err => {
-                    res.writeHead(500, {"Content-Type": "text/plain"});
-                    res.write(
-                        `===| 500: Internal server error |===`
-                        +`\n\nWhoopsie poopsie! Looks like there was a little fucky wucky in this code right here:`
-                        +`\n\n`+err.stack
-                        +`\n\n===| What can I do? |==`
-                        +`\n\nIf you're visiting the site, please report this error.`
-                        +`\n\nIf you made this mess, clean it up.`
-                    );
+                    if (!result.contentType) result.contentType = (typeof(result.content) == "object" ? "application/json" : "text/plain");
+                    if (typeof(result.content) === "object" && ["Object", "Array"].includes(result.content.constructor.name)) result.content = JSON.stringify(result.content);
+                    if (!result.headers) result.headers = {};
+                    headers["Content-Length"] = Buffer.byteLength(result.content);
+                    res.writeHead(result.statusCode, Object.assign({"Content-Type": result.contentType}, config.globalHeaders, headers, result.headers));
+                    res.write(result.content);
                     res.end();
-                });
-                return true;
-            }
+                }
+            }).catch(err => {
+                res.writeHead(500, {"Content-Type": "text/plain"});
+                res.write(
+                    `===| 500: Internal server error |===`
+                    +`\n\nWhoopsie poopsie! Looks like there was a little fucky wucky in this code right here:`
+                    +`\n\n`+err.stack
+                    +`\n\n===| What can I do? |==`
+                    +`\n\nIf you're visiting the site, please report this error.`
+                    +`\n\nIf you made this mess, clean it up.`
+                );
+                res.end();
+            });
+            return true;
         });
         if (!foundRoute) {
             // If that fails, try pageHandlers
