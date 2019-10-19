@@ -81,7 +81,6 @@ module.exports = function(input) {
     function rebuildRoutes() {
         //console.log("Building routes: "+routeStore.size+" items in map")
         routeHandlers = [].concat(...routeStore.values())
-        //console.log(routeHandlers)
     }
     const loadAPI = () => {
         watchAndCompile(path.join(config.relativeRoot, config.apiDir), [], new Map(), async fullPath => {
@@ -102,7 +101,7 @@ module.exports = function(input) {
                     }
                 })
                 //console.log("Adding new handers", routes)
-                //routeStore.set(fullPath, routes)
+                routeStore.set(fullPath, routes)
                 rebuildRoutes()
             }
         })
