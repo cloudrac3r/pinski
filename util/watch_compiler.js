@@ -20,15 +20,17 @@ module.exports = function(directory, includeDirectories, cache, compileFn) {
 		});
 	});
 	function doCompileAll() {
-		fs.readdir(directory, (err, files) => {
-			if (err) throw err;
-			files.forEach(filename => {
-				let fullPath = path.join(directory, filename).replace(/\\/g, "/");
-				if (!fs.statSync(fullPath).isDirectory()) {
-					doCompile(fullPath);
-				}
+		includeDirectories.concat(directory).forEach(directory => {
+			fs.readdir(directory, (err, files) => {
+				if (err) throw err;
+				files.forEach(filename => {
+					let fullPath = path.join(directory, filename).replace(/\\/g, "/");
+					if (!fs.statSync(fullPath).isDirectory()) {
+						doCompile(fullPath);
+					}
+				});
 			});
-		});
+		})
 	}
 	function doCompile(fullPath) {
 		let result = compileFn(fullPath);

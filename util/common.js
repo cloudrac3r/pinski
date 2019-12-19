@@ -1,6 +1,6 @@
 const util = require("util")
 
-const logLevelsIgnore = ["spam"]
+const logLevelsIgnore = []
 
 module.exports = {
     // Log a message to console with a prefix
