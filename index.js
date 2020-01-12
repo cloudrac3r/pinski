@@ -201,6 +201,8 @@ class Pinski {
 			res.end("Malformed URI")
 			return
 		}
+		// remove trailing slash
+		if (url.pathname !== "/") url.pathname = url.pathname.replace(/\/+$/, "")
 		cf.log(`[INC] ${url.pathname}`, "spam")
 		// manage cache control for file extension
 		let ext = url.pathname.split(".").slice(-1)[0]
