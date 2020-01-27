@@ -323,7 +323,7 @@ class Pinski {
 			handled = true
 			new Promise(resolve => {
 				handler.type === "pug"
-					? resolve(this.pugCache.get(handler.local)())
+					? resolve(this.pugCache.get(handler.local).web())
 				: handler.type === "sass"
 					? resolve(this.sassCache.get(handler.local))
 				: handler.absolute
