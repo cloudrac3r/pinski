@@ -97,6 +97,8 @@ class Pinski {
 		this.pugCache = new Map()
 		this.sassCache = new Map()
 
+		this.mutedLogs = []
+
 		this.api = {
 			handlers: [],
 			routeStore: new Map(),
@@ -135,6 +137,14 @@ class Pinski {
 
 	startServer() {
 		this.server = http.createServer(this._handleRequest.bind(this)).listen(this.config.port, this.config.ip)
+	}
+
+	muteLogsStartingWith(string) {
+		this.mutedLogs.push(string)
+	}
+
+	_shouldLog(path) {
+		return !this.mutedLogs.some(muted => path.startsWith(muted))
 	}
 
 	addPugDir(dir, includes = []) {
@@ -203,7 +213,7 @@ class Pinski {
 		}
 		// remove trailing slash
 		if (url.pathname !== "/") url.pathname = url.pathname.replace(/\/+$/, "")
-		cf.log(`[INC] ${url.pathname}`, "spam")
+		if (this._shouldLog(url.pathname)) cf.log(`[INC] ${url.pathname}`, "spam")
 		// manage cache control for file extension
 		let ext = url.pathname.split(".").slice(-1)[0]
 		if (this.config.basicCacheControl.exts.includes(ext)) headers["Cache-Control"] = `max-age=${this.config.basicCacheControl.seconds}, public`
@@ -238,7 +248,7 @@ class Pinski {
 			// it works. don't loop any more
 			handled = true
 			// process the request
-			cf.log(`[API] ${url.pathname} = ${handler.route}`, "spam")
+			if (this._shouldLog(url.pathname)) cf.log(`[API] ${url.pathname} = ${handler.route}`, "spam")
 			new Promise((resolve, reject) => {
 				const fill = match.slice(1)
 				if (handler.upload && (req.method === "POST" || req.method === "PATCH")) {
@@ -268,7 +278,7 @@ class Pinski {
 					return
 				}
 				if (result === null) {
-					cf.log(`${url.pathname} [API] ignoring null`, "spam") // deliberate no response
+					if (this._shouldLog(url.pathname)) cf.log(`${url.pathname} [API] ignoring null`, "spam") // deliberate no response
 					return
 				}
 				// headers
@@ -288,7 +298,7 @@ class Pinski {
 				// write body
 				if (result.stream) {
 					// stream
-					cf.log(`${url.pathname} [API] using stream`, "info")
+					if (this._shouldLog(url.pathname)) cf.log(`${url.pathname} [API] using stream`, "spam")
 					result.stream.pipe(res)
 				} else {
 					// not stream
@@ -331,7 +341,7 @@ class Pinski {
 				: resolve(fs.promises.readFile(path.join(this.config.relativeRoot, handler.local), "utf8"))
 			}).then(page => {
 				headers["Content-Length"] = Buffer.byteLength(page)
-				cf.log(`[PAG] ${url.pathname} = ${handler.web} -> ${handler.local}`, "spam")
+				if (this._shouldLog(url.pathname)) cf.log(`[PAG] ${url.pathname} = ${handler.web} -> ${handler.local}`, "spam")
 				res.writeHead(200, Object.assign({"Content-Type": mimeType(handler.web)}, headers, this.config.globalHeaders))
 				if (isHead) return res.end()
 				res.write(page)
@@ -356,7 +366,7 @@ class Pinski {
 			else return resolve(fs.promises.stat(filename))
 		}).then(stats => {
 			if (stats.isDirectory()) return Promise.reject()
-			cf.log(`[DIR] ${url.pathname}`, "spam")
+			if (this._shouldLog(url.pathname)) cf.log(`[DIR] ${url.pathname}`, "spam")
 			let ranged = toRange(stats.size, headers, req)
 			headers["Content-Length"] = ranged.length
 			res.writeHead(ranged.statusCode, Object.assign({"Content-Type": mimeType(url.pathname)}, headers, this.config.globalHeaders))
@@ -364,7 +374,7 @@ class Pinski {
 			let stream = fs.createReadStream(filename, {start: ranged.start, end: ranged.end})
 			stream.pipe(res)
 		}).catch(() => {
-			cf.log(`[404] ${url.pathname}`, "spam")
+			if (this._shouldLog(url.pathname)) cf.log(`[404] ${url.pathname}`, "spam")
 			res.writeHead(404, Object.assign({"Content-Type": "text/plain; charset=UTF-8"}, this.config.globalHeaders))
 			if (isHead) return res.end()
 			res.write("404 Not Found")
