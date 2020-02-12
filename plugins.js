@@ -47,8 +47,23 @@ function proxy(url, headers = {}) {
 	})
 }
 
+function getStaticURL(root, url) {
+	const path = pj(root, url)
+	if (instance.staticFileTable.has(path)) {
+		const value = instance.staticFileTable.get(path)
+		if (value.type === "static") {
+			return `${url}?statichash=${value.hash}`
+		} else if (value.type === "sass") {
+			return instance.pageHandlers.find(h => h.local === url).web + `?statichash=${value.hash}`
+		}
+	}
+	console.log(`Huh: Tried to get static hash but not in table for ${root} :: ${url}`)
+	return url
+}
+
 module.exports.setInstance = setInstance
 module.exports.render = render
 module.exports.redirect = redirect
 module.exports.instance = instance
 module.exports.proxy = proxy
+module.exports.getStaticURL = getStaticURL

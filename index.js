@@ -9,6 +9,12 @@ const pug = require("pug")
 const sass = require("node-sass")
 const watchAndCompile = require("./util/watch_compiler.js")
 const WebSocket = require("ws")
+const stream = require("stream")
+const crypto = require("crypto")
+
+const symbols = {
+	PUG_SOURCE_NOT_FOUND: Symbol("PUG_SOURCE_NOT_FOUND")
+}
 
 /**
  * @typedef {Map<string, {web: (locals?) => any, client: (locals?) => any}>} PugCache
@@ -33,7 +39,11 @@ const defaultConfig = {
 	filesDir: "html",
 	globalHeaders: {},
 	basicCacheControl: {
-		exts: ["ttf", "png", "jpg", "svg", "gif", "webmanifest", "ico"],
+		exts: [
+			"ttf", "svg", "gif", "webmanifest", "ico",
+			"png", "jpg", "jpeg",
+			"PNG", "JPG", "JPEG"
+		],
 		seconds: 604800
 	},
 	ip: "0.0.0.0",
@@ -96,6 +106,8 @@ class Pinski {
 		Object.assign(this.config, config)
 		this.pugCache = new Map()
 		this.sassCache = new Map()
+		/** @type {Map<string, {hash: string, type: string}>} */
+		this.staticFileTable = new Map()
 
 		this.mutedLogs = []
 
@@ -118,7 +130,8 @@ class Pinski {
 			server: this.server,
 			wss: this.wss,
 			pugCache: this.pugCache,
-			sassCache: this.sassCache
+			sassCache: this.sassCache,
+			staticFileTable: this.staticFileTable
 		}
 	}
 
@@ -147,19 +160,57 @@ class Pinski {
 		return !this.mutedLogs.some(muted => path.startsWith(muted))
 	}
 
+	addStaticHashTableDir(dir) {
+		watchAndCompile(dir, [], this.staticFileTable, fullPath => {
+			return new Promise((resolve, reject) => {
+				const hash = crypto.createHash("sha256")
+				stream.pipeline(
+					fs.createReadStream(fullPath),
+					hash,
+					err => {
+						if (err) return reject(err)
+						const digest = hash.digest("hex")
+						console.log(fullPath, "→", digest)
+						return resolve({hash: digest, type: "static"})
+					}
+				)
+			})
+		})
+	}
+
 	addPugDir(dir, includes = []) {
 		watchAndCompile(dir, includes, this.pugCache, fullPath => {
-			const web = pug.compileFile(fullPath, {doctype: "html"})
-			const client = pug.compileFileClient(fullPath, {doctype: "html", compileDebug: false})
-			return {web, client}
+			try {
+				const web = pug.compileFile(fullPath, {doctype: "html"})
+				const client = pug.compileFileClient(fullPath, {doctype: "html", compileDebug: false})
+				return {web, client}
+			} catch (error) {
+				console.error(`Pug compilation of file ${fullPath} failed.`)
+				console.error(error.message)
+				return null
+			}
 		})
 	}
 
 	addSassDir(dir) {
 		watchAndCompile(dir, [], this.sassCache, fullPath =>
-			fs.promises.readFile(fullPath, {encoding: "utf8"}).then(data =>
-				data ? sass.renderSync({data, indentedSyntax: true}).css.toString() : null
-			)
+			fs.promises.readFile(fullPath, {encoding: "utf8"}).then(data => {
+				if (data) {
+					try {
+						const rendered = sass.renderSync({data, indentedSyntax: true}).css.toString()
+						const hash = crypto.createHash("sha256").update(rendered).digest("hex")
+						this.staticFileTable.set(fullPath, {type: "sass", hash})
+						console.log(fullPath, "→", hash)
+						return rendered
+					} catch (error) {
+						console.error(`Sass compilation of file ${fullPath} failed.`)
+						console.error(error)
+						return null
+					}
+				} else {
+					return null
+				}
+			})
 		)
 	}
 
@@ -331,7 +382,14 @@ class Pinski {
 			const match = url.pathname.match(re)
 			if (!match) continue
 			handled = true
-			new Promise(resolve => {
+			new Promise((resolve, reject) => {
+				if (handler.type === "pug") {
+					if (this.pugCache.has(handler.local)) {
+						return resolve(this.pugCache.get(handler.local).web())
+					} else {
+						return reject(symbols.PUG_SOURCE_NOT_FOUND)
+					}
+				}
 				handler.type === "pug"
 					? resolve(this.pugCache.get(handler.local).web())
 				: handler.type === "sass"
@@ -341,11 +399,18 @@ class Pinski {
 				: resolve(fs.promises.readFile(path.join(this.config.relativeRoot, handler.local), "utf8"))
 			}).then(page => {
 				headers["Content-Length"] = Buffer.byteLength(page)
+				if (url.searchParams.has("statichash") && !headers["Cache-Control"]) headers["Cache-Control"] = `max-age=${30*24*60*60}, public`
 				if (this._shouldLog(url.pathname)) cf.log(`[PAG] ${url.pathname} = ${handler.web} -> ${handler.local}`, "spam")
 				res.writeHead(200, Object.assign({"Content-Type": mimeType(handler.web)}, headers, this.config.globalHeaders))
 				if (isHead) return res.end()
 				res.write(page)
 				res.end()
+			}).catch(error => {
+				if (error === symbols.PUG_SOURCE_NOT_FOUND) {
+					return this._handleError(req, res, url, headers, isHead, "Pug source file not found.")
+				} else {
+					return this._handleError(req, res, url, headers, isHead, error)
+				}
 			})
 		} // end of while loop
 		return handled
@@ -367,6 +432,7 @@ class Pinski {
 		}).then(stats => {
 			if (stats.isDirectory()) return Promise.reject()
 			if (this._shouldLog(url.pathname)) cf.log(`[DIR] ${url.pathname}`, "spam")
+			if (url.searchParams.has("statichash") && !headers["Cache-Control"]) headers["Cache-Control"] = `max-age=${30*24*60*60}, public`
 			let ranged = toRange(stats.size, headers, req)
 			headers["Content-Length"] = ranged.length
 			res.writeHead(ranged.statusCode, Object.assign({"Content-Type": mimeType(url.pathname)}, headers, this.config.globalHeaders))
@@ -386,14 +452,14 @@ class Pinski {
 		res.writeHead(500, {"Content-Type": "text/plain; charset=UTF-8"})
 		if (isHead) return res.end()
 		res.write(
-				`               ╭───────────────────────────────╮`
-			+`\n         ···<  │     500. That's an error.     │  >···`
-			+`\n               ╰───────────────────────────────╯`
+				`           ◸―――――――――――――――――――――――――――――――――――――◹`
+			+`\n     ···<  |        500. That's an error.        |  >···`
+			+`\n           ◺―――――――――――――――――――――――――――――――――――――◿`
 			+`\n\n`
 			+`\n ╱  Are you visiting this website? Not sure what's going on?  ╲`
 			+`\n ╲             You might want to come back later.             ╱`
 			+`\n\n\n`
-			+`\n`+err.stack
+			+`\n`+(err && err.stack ? err.stack : err && err.message ? err.message : err)
 		)
 		res.end()
 	}
