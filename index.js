@@ -119,6 +119,7 @@ class Pinski {
 		}
 		/** pug/sass */
 		this.pageHandlers = []
+		this.notFoundTarget = null
 
 		this.wss = null
 		this.server = null
@@ -154,6 +155,10 @@ class Pinski {
 
 	muteLogsStartingWith(string) {
 		this.mutedLogs.push(string)
+	}
+
+	setNotFoundTarget(target) {
+		this.notFoundTarget = target
 	}
 
 	_shouldLog(path) {
@@ -441,10 +446,16 @@ class Pinski {
 			stream.pipe(res)
 		}).catch(() => {
 			if (this._shouldLog(url.pathname)) cf.log(`[404] ${url.pathname}`, "spam")
-			res.writeHead(404, Object.assign({"Content-Type": "text/plain; charset=UTF-8"}, this.config.globalHeaders))
-			if (isHead) return res.end()
-			res.write("404 Not Found")
-			res.end()
+			if (this.notFoundTarget) {
+				// rewrite request to be that url instead
+				req.url = this.notFoundTarget
+				return this._handleRequest(req, res)
+			} else {
+				res.writeHead(404, Object.assign({"Content-Type": "text/plain; charset=UTF-8"}, this.config.globalHeaders))
+				if (isHead) return res.end()
+				res.write("404 Not Found")
+				res.end()
+			}
 		})
 	}
 
