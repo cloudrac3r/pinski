@@ -359,7 +359,7 @@ class Pinski {
 				} else {
 					// not stream
 					if (!result.contentType) result.contentType = (typeof result.content === "object" ? "application/json" : "text/plain")
-					if (typeof result.content === "object" && ["Object", "Array"].includes(result.content.constructor.name)) result.content = JSON.stringify(result.content)
+					if (typeof result.content === "number" || (typeof result.content === "object" && ["Object", "Array"].includes(result.content.constructor.name))) result.content = JSON.stringify(result.content)
 					headers["Content-Length"] = Buffer.byteLength(result.content)
 					res.write(result.content)
 					res.end()
