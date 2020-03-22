@@ -448,7 +448,9 @@ class Pinski {
 			if (this._shouldLog(url.pathname)) cf.log(`[404] ${url.pathname}`, "spam")
 			if (this.notFoundTarget) {
 				// rewrite request to be that url instead
-				req.url = this.notFoundTarget
+				const params = new URLSearchParams()
+				params.set("pathname", url.pathname)
+				req.url = this.notFoundTarget + "?" + params.toString()
 				return this._handleRequest(req, res)
 			} else {
 				res.writeHead(404, Object.assign({"Content-Type": "text/plain; charset=UTF-8"}, this.config.globalHeaders))
