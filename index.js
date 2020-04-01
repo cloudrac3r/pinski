@@ -390,23 +390,24 @@ class Pinski {
 			new Promise((resolve, reject) => {
 				if (handler.type === "pug") {
 					if (this.pugCache.has(handler.local)) {
-						return resolve(this.pugCache.get(handler.local).web())
+						resolve(this.pugCache.get(handler.local).web())
 					} else {
-						return reject(symbols.PUG_SOURCE_NOT_FOUND)
+						reject(symbols.PUG_SOURCE_NOT_FOUND)
 					}
+				} else if (handler.type === "sass") {
+					resolve(this.sassCache.get(handler.local))
+				} else if (handler.absolute) {
+					resolve(fs.promises.readFile(handler.local, "utf8"))
+				} else {
+					resolve(fs.promises.readFile(path.join(this.config.relativeRoot, handler.local), "utf8"))
 				}
-				handler.type === "pug"
-					? resolve(this.pugCache.get(handler.local).web())
-				: handler.type === "sass"
-					? resolve(this.sassCache.get(handler.local))
-				: handler.absolute
-					? resolve(fs.promises.readFile(handler.local, "utf8"))
-				: resolve(fs.promises.readFile(path.join(this.config.relativeRoot, handler.local), "utf8"))
 			}).then(page => {
 				headers["Content-Length"] = Buffer.byteLength(page)
 				if (url.searchParams.has("statichash") && !headers["Cache-Control"]) headers["Cache-Control"] = `max-age=${30*24*60*60}, public`
 				if (this._shouldLog(url.pathname)) cf.log(`[PAG] ${url.pathname} = ${handler.web} -> ${handler.local}`, "spam")
-				res.writeHead(200, Object.assign({"Content-Type": mimeType(handler.web)}, headers, this.config.globalHeaders))
+				let contentType = mimeType(handler.web) || mimeType(handler.local)
+				if (handler.type === "pug") contentType = "text/html; charset=UTF-8"
+				res.writeHead(200, Object.assign({"Content-Type": contentType}, headers, this.config.globalHeaders))
 				if (isHead) return res.end()
 				res.write(page)
 				res.end()
