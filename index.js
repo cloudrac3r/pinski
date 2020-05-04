@@ -6,7 +6,7 @@ const path = require("path")
 const mime = require("mime")
 const cf = require("./util/common.js")
 const pug = require("pug")
-const sass = require("node-sass")
+const sass = require("sass")
 const watchAndCompile = require("./util/watch_compiler.js")
 const WebSocket = require("ws")
 const stream = require("stream")
@@ -203,7 +203,7 @@ class Pinski {
 			fs.promises.readFile(fullPath, {encoding: "utf8"}).then(data => {
 				if (data) {
 					try {
-						const rendered = sass.renderSync({data, indentedSyntax: true}).css.toString()
+						const rendered = sass.renderSync({file: fullPath, indentedSyntax: true}).css.toString()
 						const hash = crypto.createHash("sha256").update(rendered).digest("hex")
 						this.staticFileTable.set(fullPath, {type: "sass", hash})
 						console.log(fullPath, "→", hash)
