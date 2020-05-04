@@ -10,6 +10,8 @@ function setInstance(i) {
 }
 
 function render(statusCode, filename, locals = undefined) {
+	if (!locals) locals = {}
+	locals.getStaticURL = getStaticURL
 	const page = instance.pugCache.get(filename).web(locals)
 	return {
 		statusCode,
@@ -54,10 +56,10 @@ function getStaticURL(root, url) {
 		if (value.type === "static") {
 			return `${url}?statichash=${value.hash}`
 		} else if (value.type === "sass") {
-			return instance.pageHandlers.find(h => h.local === url).web + `?statichash=${value.hash}`
+			return instance.pageHandlers.find(h => h.local === path).web + `?statichash=${value.hash}`
 		}
 	}
-	console.log(`Huh: Tried to get static hash but not in table for ${root} :: ${url}`)
+	console.log(`Huh: Tried to get static hash but not in table for ${root} :: ${path}`)
 	return url
 }
 

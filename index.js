@@ -11,6 +11,7 @@ const watchAndCompile = require("./util/watch_compiler.js")
 const WebSocket = require("ws")
 const stream = require("stream")
 const crypto = require("crypto")
+const plugins = require("./plugins")
 
 const symbols = {
 	PUG_SOURCE_NOT_FOUND: Symbol("PUG_SOURCE_NOT_FOUND")
@@ -390,7 +391,7 @@ class Pinski {
 			new Promise((resolve, reject) => {
 				if (handler.type === "pug") {
 					if (this.pugCache.has(handler.local)) {
-						resolve(this.pugCache.get(handler.local).web())
+						resolve(this.pugCache.get(handler.local).web({static: this.staticFileTable, getStaticURL: plugins.getStaticURL}))
 					} else {
 						reject(symbols.PUG_SOURCE_NOT_FOUND)
 					}
