@@ -176,7 +176,7 @@ class Pinski {
 					err => {
 						if (err) return reject(err)
 						const digest = hash.digest("hex")
-						console.log(fullPath, "→", digest)
+						// console.log(fullPath, "→", digest)
 						return resolve({hash: digest, type: "static"})
 					}
 				)
@@ -203,10 +203,10 @@ class Pinski {
 			fs.promises.readFile(fullPath, {encoding: "utf8"}).then(data => {
 				if (data) {
 					try {
-						const rendered = sass.renderSync({file: fullPath, indentedSyntax: true}).css.toString()
+						const rendered = sass.renderSync({file: fullPath, indentedSyntax: true, outputStyle: "compressed"}).css.toString()
 						const hash = crypto.createHash("sha256").update(rendered).digest("hex")
 						this.staticFileTable.set(fullPath, {type: "sass", hash})
-						console.log(fullPath, "→", hash)
+						cf.log("[CMP] Compiled "+fullPath, "spam")
 						return rendered
 					} catch (error) {
 						console.error(`Sass compilation of file ${fullPath} failed.`)
