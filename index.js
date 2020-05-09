@@ -198,12 +198,12 @@ class Pinski {
 		})
 	}
 
-	addSassDir(dir) {
-		watchAndCompile(dir, [], this.sassCache, fullPath =>
+	addSassDir(dir, includes = []) {
+		watchAndCompile(dir, includes, this.sassCache, fullPath =>
 			fs.promises.readFile(fullPath, {encoding: "utf8"}).then(data => {
 				if (data) {
 					try {
-						const rendered = sass.renderSync({file: fullPath, indentedSyntax: true, outputStyle: "compressed"}).css.toString()
+						const rendered = sass.renderSync({file: fullPath, indentedSyntax: !fullPath.endsWith("scss"), outputStyle: "compressed"}).css.toString()
 						const hash = crypto.createHash("sha256").update(rendered).digest("hex")
 						this.staticFileTable.set(fullPath, {type: "sass", hash})
 						cf.log("[CMP] Compiled "+fullPath, "spam")
