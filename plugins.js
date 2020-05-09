@@ -15,7 +15,7 @@ function render(statusCode, filename, locals = undefined) {
 	const page = instance.pugCache.get(filename).web(locals)
 	return {
 		statusCode,
-		contentType: "text/html",
+		contentType: "text/html; charset=UTF-8",
 		content: page
 	}
 }
@@ -23,7 +23,7 @@ function render(statusCode, filename, locals = undefined) {
 function redirect(url, statusCode = 303) {
 	return {
 		statusCode,
-		contentType: "text/html",
+		contentType: "text/html; charset=UTF-8",
 		content: "Redirecting...",
 		headers: {
 			"Location": url
