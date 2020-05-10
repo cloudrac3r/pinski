@@ -9,9 +9,8 @@ function setInstance(i) {
 	instance = i
 }
 
-function render(statusCode, filename, locals = undefined) {
-	if (!locals) locals = {}
-	locals.getStaticURL = getStaticURL
+function render(statusCode, filename, locals_in = {}) {
+	const locals = Object.assign({}, instance.pugDefaultLocals, locals_in)
 	const page = instance.pugCache.get(filename).web(locals)
 	return {
 		statusCode,

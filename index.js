@@ -109,6 +109,10 @@ class Pinski {
 		this.sassCache = new Map()
 		/** @type {Map<string, {hash: string, type: string}>} */
 		this.staticFileTable = new Map()
+		this.pugDefaultLocals = {
+			static: this.staticFileTable,
+			getStaticURL: plugins.getStaticURL
+		}
 
 		this.mutedLogs = []
 
@@ -391,7 +395,7 @@ class Pinski {
 			new Promise((resolve, reject) => {
 				if (handler.type === "pug") {
 					if (this.pugCache.has(handler.local)) {
-						resolve(this.pugCache.get(handler.local).web({static: this.staticFileTable, getStaticURL: plugins.getStaticURL}))
+						resolve(this.pugCache.get(handler.local).web(this.pugDefaultLocals))
 					} else {
 						reject(symbols.PUG_SOURCE_NOT_FOUND)
 					}
