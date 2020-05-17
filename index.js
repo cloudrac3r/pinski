@@ -302,7 +302,7 @@ class Pinski {
 			const handler = this.api.handlers[i]
 			i++
 			// see if it works
-			if (!handler.route || !handler.methods || !handler.methods.includes(req.method)) continue
+			if (!handler.route || !handler.methods || (!handler.methods.includes(req.method) && !handler.methods.includes("*"))) continue
 			const re = new RegExp(`^${handler.route}$`)
 			const match = url.pathname.match(re)
 			if (!match) continue
