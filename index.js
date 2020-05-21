@@ -361,6 +361,11 @@ class Pinski {
 					// stream
 					if (this._shouldLog(url.pathname)) cf.log(`${url.pathname} [API] using stream`, "spam")
 					result.stream.pipe(res)
+					req.on("aborted", () => {
+						result.stream.destroy()
+					})
+					// res.on("end", () => console.log("end"))
+					// res.on("close", () => console.log("close"))
 				} else {
 					// not stream
 					if (!result.contentType) result.contentType = (typeof result.content === "object" ? "application/json" : "text/plain")
