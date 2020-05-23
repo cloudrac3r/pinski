@@ -33,11 +33,12 @@ function redirect(url, statusCode = 303) {
 /**
  * @param {string|URL} url
  */
-function proxy(url, headers = {}) {
+function proxy(url, headers = {}, responseHeaderTransform = h => {}) {
 	return new Promise(resolve => {
 		if (typeof url === "string") url = new URL(url)
 		const requester = url.protocol === "http:" ? http : url.protocol === "https:" ? https : null
 		const req = requester.request(url, res => {
+			headers = Object.assign({}, headers, responseHeaderTransform(res.headers))
 			resolve({
 				statusCode: res.statusCode,
 				headers: headers,
