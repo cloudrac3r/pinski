@@ -12,6 +12,7 @@ const WebSocket = require("ws")
 const stream = require("stream")
 const crypto = require("crypto")
 const plugins = require("./plugins")
+const {EventEmitter} = require("events")
 
 const symbols = {
 	PUG_SOURCE_NOT_FOUND: Symbol("PUG_SOURCE_NOT_FOUND")
@@ -128,6 +129,9 @@ class Pinski {
 
 		this.wss = null
 		this.server = null
+
+		this.pendingCompiles = 0
+		this.pendingCompilesEmitter = new EventEmitter()
 	}
 
 	getExports() {
@@ -170,6 +174,16 @@ class Pinski {
 		return !this.mutedLogs.some(muted => path.startsWith(muted))
 	}
 
+	waitForFirstCompile() {
+		if (this.pendingCompiles === 0) {
+			return Promise.resolve()
+		} else {
+			return new Promise(resolve => {
+				this.pendingCompilesEmitter.once("done", resolve)
+			})
+		}
+	}
+
 	addStaticHashTableDir(dir) {
 		watchAndCompile(dir, [], this.staticFileTable, fullPath => {
 			return new Promise((resolve, reject) => {
@@ -189,6 +203,7 @@ class Pinski {
 	}
 
 	addPugDir(dir, includes = []) {
+		this.pendingCompiles++
 		watchAndCompile(dir, includes, this.pugCache, fullPath => {
 			try {
 				const web = pug.compileFile(fullPath, {doctype: "html"})
@@ -199,10 +214,14 @@ class Pinski {
 				console.error(error.message)
 				return null
 			}
+		}).then(() => {
+			this.pendingCompiles--
+			if (this.pendingCompiles === 0) this.pendingCompilesEmitter.emit("done")
 		})
 	}
 
 	addSassDir(dir, includes = []) {
+		this.pendingCompiles++
 		watchAndCompile(dir, includes, this.sassCache, fullPath =>
 			fs.promises.readFile(fullPath, {encoding: "utf8"}).then(data => {
 				if (data) {
@@ -221,7 +240,10 @@ class Pinski {
 					return null
 				}
 			})
-		)
+		).then(() => {
+			this.pendingCompiles--
+			if (this.pendingCompiles === 0) this.pendingCompilesEmitter.emit("done")
+		})
 	}
 
 	addAPIDir(dir) {
@@ -360,12 +382,16 @@ class Pinski {
 				if (result.stream) {
 					// stream
 					if (this._shouldLog(url.pathname)) cf.log(`${url.pathname} [API] using stream`, "spam")
+					// res.on("end", () => console.log("end"))
+					// res.on("finish", () => console.log("finish"))
+					// res.on("close", () => console.log("close"))
+					// result.stream.on("end", () => console.log("readable end"))
+					// result.stream.on("close", () => console.log("readable close"))
 					result.stream.pipe(res)
 					req.on("aborted", () => {
+						console.log("aborted")
 						result.stream.destroy()
 					})
-					// res.on("end", () => console.log("end"))
-					// res.on("close", () => console.log("close"))
 				} else {
 					// not stream
 					if (!result.contentType) result.contentType = (typeof result.content === "object" ? "application/json" : "text/plain")

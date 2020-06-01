@@ -1,8 +1,11 @@
 const fs = require("fs");
 const path = require("path");
 
+/**
+ * @param {string} directory
+ * @param {string[]} includeDirectories
+ */
 module.exports = function(directory, includeDirectories, cache, compileFn) {
-	doCompileAll();
 	fs.watch(directory, (eventType, filename) => {
 		//console.log(eventType, filename);
 		let fullPath = path.join(directory, filename).replace(/\\/g, "/");
@@ -20,21 +23,21 @@ module.exports = function(directory, includeDirectories, cache, compileFn) {
 		});
 	});
 	function doCompileAll() {
-		includeDirectories.concat(directory).forEach(directory => {
-			fs.readdir(directory, (err, files) => {
-				if (err) throw err;
-				files.forEach(filename => {
+		return Promise.all(
+			includeDirectories.concat(directory).map(async directory => {
+				const files = await fs.promises.readdir(directory)
+				await Promise.all(files.map(async filename => {
 					let fullPath = path.join(directory, filename).replace(/\\/g, "/");
 					if (!fs.statSync(fullPath).isDirectory()) {
-						doCompile(fullPath);
+						await doCompile(fullPath);
 					}
-				});
-			});
-		})
+				}))
+			})
+		)
 	}
-	function doCompile(fullPath) {
-		let result = compileFn(fullPath);
-		if (result instanceof Promise) result.then(data => data && cache.set(fullPath, data));
-		else if (result) cache.set(fullPath, result);
+	async function doCompile(fullPath) {
+		let result = await compileFn(fullPath);
+		if (result) cache.set(fullPath, result);
 	}
+	return doCompileAll();
 }
