@@ -31,6 +31,7 @@ const symbols = {
  * @property {string} [ip]
  * @property {string} [relativeRoot]
  * @property {boolean} [ws]
+ * @property {string} [onionLocation]
  */
 
 void 0
@@ -50,7 +51,8 @@ const defaultConfig = {
 	},
 	ip: "0.0.0.0",
 	relativeRoot: "",
-	ws: false
+	ws: false,
+	onionLocation: null
 }
 
 function mimeType(type) {
@@ -300,6 +302,8 @@ class Pinski {
 		// manage cache control for file extension
 		let ext = url.pathname.split(".").slice(-1)[0]
 		if (this.config.basicCacheControl.exts.includes(ext)) headers["Cache-Control"] = `max-age=${this.config.basicCacheControl.seconds}, public`
+		// manage onion-location
+		if (this.config.onionLocation) headers["Onion-Location"] = this.config.onionLocation + req.url
 		// go through handlers
 		try {
 			this._handleWithAPI(req, res, url, headers, isHead)
