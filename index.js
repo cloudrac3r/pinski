@@ -134,6 +134,8 @@ class Pinski {
 
 		this.pendingCompiles = 0
 		this.pendingCompilesEmitter = new EventEmitter()
+
+		this.shutdownCallbacks = []
 	}
 
 	getExports() {
@@ -187,7 +189,7 @@ class Pinski {
 	}
 
 	addStaticHashTableDir(dir) {
-		watchAndCompile(dir, [], this.staticFileTable, fullPath => {
+		const wac = watchAndCompile(dir, [], this.staticFileTable, fullPath => {
 			return new Promise((resolve, reject) => {
 				const hash = crypto.createHash("sha256")
 				stream.pipeline(
@@ -202,11 +204,12 @@ class Pinski {
 				)
 			})
 		})
+		this.shutdownCallbacks.push(wac.shutdown)
 	}
 
 	addPugDir(dir, includes = []) {
 		this.pendingCompiles++
-		watchAndCompile(dir, includes, this.pugCache, fullPath => {
+		const wac = watchAndCompile(dir, includes, this.pugCache, fullPath => {
 			try {
 				const web = pug.compileFile(fullPath, {doctype: "html"})
 				const client = pug.compileFileClient(fullPath, {doctype: "html", compileDebug: false})
@@ -216,15 +219,17 @@ class Pinski {
 				console.error(error.message)
 				return null
 			}
-		}).then(() => {
+		})
+		wac.compiler.then(() => {
 			this.pendingCompiles--
 			if (this.pendingCompiles === 0) this.pendingCompilesEmitter.emit("done")
 		})
+		this.shutdownCallbacks.push(wac.shutdown)
 	}
 
 	addSassDir(dir, includes = []) {
 		this.pendingCompiles++
-		watchAndCompile(dir, includes, this.sassCache, fullPath =>
+		const wac = watchAndCompile(dir, includes, this.sassCache, fullPath =>
 			fs.promises.readFile(fullPath, {encoding: "utf8"}).then(data => {
 				if (data) {
 					try {
@@ -242,10 +247,12 @@ class Pinski {
 					return null
 				}
 			})
-		).then(() => {
+		)
+		wac.compiler.then(() => {
 			this.pendingCompiles--
 			if (this.pendingCompiles === 0) this.pendingCompilesEmitter.emit("done")
 		})
+		this.shutdownCallbacks.push(wac.shutdown)
 	}
 
 	addAPIDir(dir) {
@@ -255,7 +262,7 @@ class Pinski {
 	addAbsoluteAPIDir(dir) {
 		if (this.api.dirs.includes(dir)) return
 		this.api.dirs.push(dir)
-		watchAndCompile(dir, [], new Map(), async fullPath => {
+		const wac = watchAndCompile(dir, [], new Map(), async fullPath => {
 			if (this.api.cancelStore.has(fullPath)) {
 				const cancel = this.api.cancelStore.get(fullPath)
 				this.api.cancelStore.delete(fullPath)
@@ -277,6 +284,7 @@ class Pinski {
 				this.api.handlers = [].concat(...this.api.routeStore.values())
 			}
 		})
+		this.shutdownCallbacks.push(wac.shutdown)
 	}
 
 	_handleRequest(req, res) {
@@ -516,6 +524,11 @@ class Pinski {
 			+`\n`+(err && err.stack ? err.stack : err && err.message ? err.message : err)
 		)
 		res.end()
+	}
+
+	shutdown() {
+		this.server.close()
+		this.shutdownCallbacks.forEach(c => c())
 	}
 }
 

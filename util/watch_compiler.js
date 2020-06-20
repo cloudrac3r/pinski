@@ -6,21 +6,26 @@ const path = require("path");
  * @param {string[]} includeDirectories
  */
 module.exports = function(directory, includeDirectories, cache, compileFn) {
-	fs.watch(directory, (eventType, filename) => {
-		//console.log(eventType, filename);
-		let fullPath = path.join(directory, filename).replace(/\\/g, "/");
-		if (fs.existsSync(fullPath)) {
-			if (!fs.statSync(fullPath).isDirectory()) {
-				doCompile(fullPath);
+	const watchers = []
+	watchers.push(
+		fs.watch(directory, (eventType, filename) => {
+			//console.log(eventType, filename);
+			let fullPath = path.join(directory, filename).replace(/\\/g, "/");
+			if (fs.existsSync(fullPath)) {
+				if (!fs.statSync(fullPath).isDirectory()) {
+					doCompile(fullPath);
+				}
+			} else {
+				cache.delete(fullPath);
 			}
-		} else {
-			cache.delete(fullPath);
-		}
-	});
+		})
+	)
 	includeDirectories.forEach(include => {
-		fs.watch(include, (eventType, filename) => {
-			doCompileAll();
-		});
+		watchers.push(
+			fs.watch(include, (eventType, filename) => {
+				doCompileAll();
+			})
+		)
 	});
 	function doCompileAll() {
 		return Promise.all(
@@ -39,5 +44,13 @@ module.exports = function(directory, includeDirectories, cache, compileFn) {
 		let result = await compileFn(fullPath);
 		if (result) cache.set(fullPath, result);
 	}
-	return doCompileAll();
+	return {
+		compiler: doCompileAll(),
+		shutdown: () => {
+			for (const watcher of watchers) {
+				watcher.close()
+				watcher.removeAllListeners()
+			}
+		}
+	}
 }
