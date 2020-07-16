@@ -1,38 +1,56 @@
 const fs = require("fs");
 const path = require("path");
 
+/**
+ * @param {string} directory
+ * @param {string[]} includeDirectories
+ */
 module.exports = function(directory, includeDirectories, cache, compileFn) {
-	doCompileAll();
-	fs.watch(directory, (eventType, filename) => {
-		//console.log(eventType, filename);
-		let fullPath = path.join(directory, filename).replace(/\\/g, "/");
-		if (fs.existsSync(fullPath)) {
-			if (!fs.statSync(fullPath).isDirectory()) {
-				doCompile(fullPath);
-			}
-		} else {
-			cache.delete(fullPath);
-		}
-	});
-	includeDirectories.forEach(include => {
-		fs.watch(include, (eventType, filename) => {
-			doCompileAll();
-		});
-	});
-	function doCompileAll() {
-		fs.readdir(directory, (err, files) => {
-			if (err) throw err;
-			files.forEach(filename => {
-				let fullPath = path.join(directory, filename).replace(/\\/g, "/");
+	const watchers = []
+	watchers.push(
+		fs.watch(directory, (eventType, filename) => {
+			//console.log(eventType, filename);
+			let fullPath = path.join(directory, filename).replace(/\\/g, "/");
+			if (fs.existsSync(fullPath)) {
 				if (!fs.statSync(fullPath).isDirectory()) {
 					doCompile(fullPath);
 				}
-			});
-		});
+			} else {
+				cache.delete(fullPath);
+			}
+		})
+	)
+	includeDirectories.forEach(include => {
+		watchers.push(
+			fs.watch(include, (eventType, filename) => {
+				doCompileAll();
+			})
+		)
+	});
+	function doCompileAll() {
+		return Promise.all(
+			includeDirectories.concat(directory).map(async directory => {
+				const files = await fs.promises.readdir(directory)
+				await Promise.all(files.map(async filename => {
+					let fullPath = path.join(directory, filename).replace(/\\/g, "/");
+					if (!fs.statSync(fullPath).isDirectory()) {
+						await doCompile(fullPath);
+					}
+				}))
+			})
+		)
 	}
-	function doCompile(fullPath) {
-		let result = compileFn(fullPath);
-		if (result instanceof Promise) result.then(data => data && cache.set(fullPath, data));
-		else if (result) cache.set(fullPath, result);
+	async function doCompile(fullPath) {
+		let result = await compileFn(fullPath);
+		if (result) cache.set(fullPath, result);
+	}
+	return {
+		compiler: doCompileAll(),
+		shutdown: () => {
+			for (const watcher of watchers) {
+				watcher.close()
+				watcher.removeAllListeners()
+			}
+		}
 	}
 }
