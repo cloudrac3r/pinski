@@ -12,7 +12,7 @@ module.exports = function(directory, includeDirectories, cache, compileFn) {
 			//console.log(eventType, filename);
 			let fullPath = path.join(directory, filename).replace(/\\/g, "/");
 			if (fs.existsSync(fullPath)) {
-				if (!fs.statSync(fullPath).isDirectory()) {
+				if (!fs.statSync(fullPath).isDirectory() && !fullPath.endsWith("~")) {
 					doCompile(fullPath);
 				}
 			} else {
