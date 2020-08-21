@@ -33,7 +33,7 @@ module.exports = function(directory, includeDirectories, cache, compileFn) {
 				const files = await fs.promises.readdir(directory)
 				await Promise.all(files.map(async filename => {
 					let fullPath = path.join(directory, filename).replace(/\\/g, "/");
-					if (!fs.statSync(fullPath).isDirectory()) {
+					if (!fs.statSync(fullPath).isDirectory() && !fullPath.endsWith("~")) {
 						await doCompile(fullPath);
 					}
 				}))
