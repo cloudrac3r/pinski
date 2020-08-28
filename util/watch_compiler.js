@@ -1,6 +1,16 @@
 const fs = require("fs");
 const path = require("path");
 
+function pathIsUseful(fullPath) {
+	return (
+		!fs.statSync(fullPath).isDirectory()
+			&& !fullPath.endsWith("~")
+			&& !fullPath.startsWith(".")
+			&& !fullPath.includes("/.")
+			&& !fullPath.endsWith("#")
+	)
+}
+
 /**
  * @param {string} directory
  * @param {string[]} includeDirectories
@@ -12,7 +22,7 @@ module.exports = function(directory, includeDirectories, cache, compileFn) {
 			//console.log(eventType, filename);
 			let fullPath = path.join(directory, filename).replace(/\\/g, "/");
 			if (fs.existsSync(fullPath)) {
-				if (!fs.statSync(fullPath).isDirectory() && !fullPath.endsWith("~")) {
+				if (pathIsUseful(fullPath)) {
 					doCompile(fullPath);
 				}
 			} else {
@@ -33,7 +43,7 @@ module.exports = function(directory, includeDirectories, cache, compileFn) {
 				const files = await fs.promises.readdir(directory)
 				await Promise.all(files.map(async filename => {
 					let fullPath = path.join(directory, filename).replace(/\\/g, "/");
-					if (!fs.statSync(fullPath).isDirectory() && !fullPath.endsWith("~")) {
+					if (pathIsUseful(fullPath)) {
 						await doCompile(fullPath);
 					}
 				}))

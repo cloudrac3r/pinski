@@ -56,7 +56,12 @@ function getStaticURL(root, url) {
 		if (value.type === "static") {
 			return `${url}?statichash=${value.hash}`
 		} else if (value.type === "sass") {
-			return instance.pageHandlers.find(h => h.local === path).web + `?statichash=${value.hash}`
+			const handler = instance.pageHandlers.find(h => h.local === path)
+			if (handler) {
+				return handler.web + `?statichash=${value.hash}`
+			} else {
+				throw new Error(`sass file ${url} compiled and stored in staticFileTable, but no pageHandler was set up to access it.`)
+			}
 		}
 	}
 	console.log(`Huh: Tried to get static hash but not in table for ${root} :: ${path}`)
