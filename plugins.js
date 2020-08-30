@@ -9,12 +9,13 @@ function setInstance(i) {
 	instance = i
 }
 
-function render(statusCode, filename, locals_in = {}) {
+function render(statusCode, filename, locals_in = {}, headers = {}) {
 	const locals = Object.assign({}, instance.pugDefaultLocals, locals_in)
 	const page = instance.pugCache.get(filename).web(locals)
 	return {
 		statusCode,
 		contentType: "text/html; charset=UTF-8",
+		headers,
 		content: page
 	}
 }
