@@ -271,6 +271,9 @@ class Pinski {
 			delete require.cache[require.resolve(fullPath)]
 			let routes = require(fullPath)
 			if (routes instanceof Array) {
+				routes.forEach(r => {
+					if (typeof r.priority === "undefined") r.priority = 0
+				})
 				routes = routes.filter(r => {
 					if (r.cancel) {
 						this.api.cancelStore.set(fullPath, r.code)
@@ -281,7 +284,7 @@ class Pinski {
 				})
 				//console.log("Adding new handers", routes)
 				this.api.routeStore.set(fullPath, routes)
-				this.api.handlers = [].concat(...this.api.routeStore.values())
+				this.api.handlers = [].concat(...this.api.routeStore.values()).sort((a, b) => (b.priority - a.priority))
 			}
 		})
 		this.shutdownCallbacks.push(wac.shutdown)
