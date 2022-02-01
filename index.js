@@ -441,7 +441,7 @@ class Pinski {
 			new Promise((resolve, reject) => {
 				if (handler.type === "pug") {
 					if (this.pugCache.has(handler.local)) {
-						resolve(this.pugCache.get(handler.local).web(this.pugDefaultLocals))
+						resolve(this.pugCache.get(handler.local).web(Object.assign({req, url}, this.pugDefaultLocals)))
 					} else {
 						reject(symbols.PUG_SOURCE_NOT_FOUND)
 					}

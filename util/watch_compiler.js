@@ -3,11 +3,11 @@ const path = require("path");
 
 function pathIsUseful(fullPath) {
 	return (
-		!fs.statSync(fullPath).isDirectory()
-			&& !fullPath.endsWith("~")
+		!fullPath.endsWith("~")
 			&& !fullPath.startsWith(".")
 			&& !fullPath.includes("/.")
 			&& !fullPath.endsWith("#")
+			&& !fs.statSync(fullPath).isDirectory()
 	)
 }
 
