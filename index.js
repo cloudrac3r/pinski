@@ -524,7 +524,7 @@ class Pinski {
 			+`\n ╱  Are you visiting this website? Not sure what's going on?  ╲`
 			+`\n ╲             You might want to come back later.             ╱`
 			+`\n\n\n`
-			+`\n`+(err && err.stack ? err.stack : err && err.message ? err.message : err)
+			+`\n`+(err && err.stack ? err.stack : err && err.message ? err.message : err.description ? err.description : err)
 		)
 		res.end()
 	}
